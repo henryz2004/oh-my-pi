@@ -2819,6 +2819,7 @@ export async function runRootCommand(
 					subagentEventBus,
 					mcpManager,
 					input: rpcInput,
+					exitWhenReparented: mode === "rpc-ui",
 				});
 			} else if (isInteractive) {
 				const versionCheckPromise = checkForNewVersion(VERSION).catch(() => undefined);

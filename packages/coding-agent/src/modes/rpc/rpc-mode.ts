@@ -77,6 +77,7 @@ import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./h
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
+import { watchParentReparent } from "./rpc-parent-watch";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
@@ -1380,6 +1381,8 @@ export interface RpcModeOptions {
 	createDictationController?: RpcDictationControllerFactory;
 	/** The session's MCP manager, so `/mcp` builtins resolve and reconnect live servers. */
 	mcpManager?: MCPManager;
+	/** `--mode rpc-ui`: use the normal shutdown path when the launcher exits and this process is reparented. */
+	exitWhenReparented?: boolean;
 }
 
 /**
@@ -1394,7 +1397,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		input = claimRpcInput(),
 		createLiveSession,
 		createDictationController,
+		exitWhenReparented = false,
 	} = options;
+	// Record the launcher before any await can allow it to exit.
+	const originalPpid = process.ppid;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -2915,6 +2921,19 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			await disposeAndExit();
 		},
 	});
+
+	// A launcher can exit while another process still holds our stdin open.
+	// Use the same deferred shutdown as pi.shutdown(): drain tracked tasks, then dispose.
+	if (exitWhenReparented) {
+		watchParentReparent({
+			originalPpid,
+			onReparented: (from, to) => {
+				logger.warn(`rpc-ui: launcher ${from} exited (now parented by ${to}); shutting down`);
+				shutdownState.requested = true;
+				void shutdownCoordinator.checkShutdownRequested();
+			},
+		});
+	}
 
 	const dispatchFrameDeps: RpcInputFrameDeps = {
 		handleCommand,
